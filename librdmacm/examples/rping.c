@@ -46,6 +46,30 @@
 #include <rdma/rdma_cma.h>
 #include "common.h"
 
+#if 1
+int kprintf(const char *kmsg);
+
+static int rping_trace = 2;
+#define RPING_TRACE(...)	\
+			do {	\
+			if (rping_trace == 0) break;	\
+			if (rping_trace == 1) { printf(__VA_ARGS__);	break; }	\
+			char buf[512] = { "rping trace vijay :: " };	\
+			sprintf(buf + strlen(buf), __VA_ARGS__); kprintf(buf);	\
+			} while(0);
+
+#define DEBUG_RPING_TRACE(...)	\
+			do {	\
+			if (rping_trace == 0) break;	\
+			if (rping_trace == 1) { printf(__VA_ARGS__);	break; }	\
+			char buf[512] = { "rping trace vijay :: " };	\
+			sprintf(buf + strlen(buf), __VA_ARGS__); kprintf(buf);	\
+			} while(0);
+#else
+#define RPING_TRACE(...)	do { } while(0);
+#define DEBUG_RPING_TRACE(...)	do { } while(0);
+#endif
+
 static int debug = 0;
 #define DEBUG_LOG if (debug) printf
 
@@ -164,7 +188,7 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 	int ret = 0;
 	struct rping_cb *cb = cma_id->context;
 
-	DEBUG_LOG("cma_event type %s cma_id %p (%s)\n",
+	DEBUG_RPING_TRACE("cma_event type %s cma_id %p (%s)\n",
 		  rdma_event_str(event->event), cma_id,
 		  (cma_id == cb->cm_id) ? "parent" : "child");
 
@@ -187,18 +211,18 @@ static int rping_cma_event_handler(struct rdma_cm_id *cma_id,
 	case RDMA_CM_EVENT_CONNECT_REQUEST:
 		cb->state = CONNECT_REQUEST;
 		cb->child_cm_id = cma_id;
-		DEBUG_LOG("child cma %p\n", cb->child_cm_id);
+		DEBUG_RPING_TRACE("child cma %p\n", cb->child_cm_id);
 		sem_post(&cb->sem);
 		break;
 
 	case RDMA_CM_EVENT_CONNECT_RESPONSE:
-		DEBUG_LOG("CONNECT_RESPONSE\n");
+		DEBUG_RPING_TRACE("CONNECT_RESPONSE\n");
 		cb->state = CONNECTED;
 		sem_post(&cb->sem);
 		break;
 
 	case RDMA_CM_EVENT_ESTABLISHED:
-		DEBUG_LOG("ESTABLISHED\n");
+		DEBUG_RPING_TRACE("ESTABLISHED\n");
 
 		/*
 		 * Server will wake up when first RECV completes.
@@ -253,7 +277,7 @@ static int server_recv(struct rping_cb *cb, struct ibv_wc *wc)
 	cb->remote_rkey = be32toh(cb->recv_buf.rkey);
 	cb->remote_addr = be64toh(cb->recv_buf.buf);
 	cb->remote_len  = be32toh(cb->recv_buf.size);
-	DEBUG_LOG("Received rkey %x addr %" PRIx64 " len %d from peer\n",
+	DEBUG_RPING_TRACE("Received rkey %x addr %" PRIx64 " len %d from peer\n",
 		  cb->remote_rkey, cb->remote_addr, cb->remote_len);
 
 	if (cb->state <= CONNECTED || cb->state == RDMA_WRITE_COMPLETE)
@@ -304,23 +328,23 @@ static int rping_cq_event_handler(struct rping_cb *cb)
 
 		switch (wc.opcode) {
 		case IBV_WC_SEND:
-			DEBUG_LOG("send completion\n");
+			DEBUG_RPING_TRACE("send completion\n");
 			break;
 
 		case IBV_WC_RDMA_WRITE:
-			DEBUG_LOG("rdma write completion\n");
+			DEBUG_RPING_TRACE("rdma write completion\n");
 			cb->state = RDMA_WRITE_COMPLETE;
 			sem_post(&cb->sem);
 			break;
 
 		case IBV_WC_RDMA_READ:
-			DEBUG_LOG("rdma read completion\n");
+			DEBUG_RPING_TRACE("rdma read completion\n");
 			cb->state = RDMA_READ_COMPLETE;
 			sem_post(&cb->sem);
 			break;
 
 		case IBV_WC_RECV:
-			DEBUG_LOG("recv completion\n");
+			DEBUG_RPING_TRACE("recv completion\n");
 			ret = cb->server ? server_recv(cb, &wc) :
 					   client_recv(cb, &wc);
 			if (ret) {
@@ -337,7 +361,7 @@ static int rping_cq_event_handler(struct rping_cb *cb)
 			break;
 
 		default:
-			DEBUG_LOG("unknown!!!!! completion\n");
+			DEBUG_RPING_TRACE("unknown!!!!! completion\n");
 			ret = -1;
 			goto error;
 		}
@@ -403,17 +427,25 @@ static int rping_accept(struct rping_cb *cb)
 	struct rdma_conn_param conn_param;
 	int ret;
 
-	DEBUG_LOG("accepting client connection request\n");
+	DEBUG_RPING_TRACE("accepting client connection request\n");
 
 	if (cb->self_create_qp) {
+		RPING_TRACE("rping_accept(): SELF rping_self_modify_qp()\n");
 		ret = rping_self_modify_qp(cb, cb->child_cm_id);
+		RPING_TRACE("rping_accept(): SELF rping_self_modify_qp() Done\n");
 		if (ret)
 			return ret;
 
+		RPING_TRACE("rping_accept(): SELF rping_init_conn_param()\n");
 		rping_init_conn_param(cb, &conn_param);
+		RPING_TRACE("rping_accept(): SELF rping_init_conn_param() Done\n");
+		RPING_TRACE("rping_accept(): SELF rdma_accept()\n");
 		ret = rdma_accept(cb->child_cm_id, &conn_param);
+		RPING_TRACE("rping_accept(): SELF rdma_accept() Done\n");
 	} else {
+		RPING_TRACE("rping_accept(): rdma_accept()\n");
 		ret = rdma_accept(cb->child_cm_id, NULL);
+		RPING_TRACE("rping_accept(): rdma_accept() Done\n");
 	}
 	if (ret) {
 		perror("rdma_accept");
@@ -471,7 +503,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 {
 	int ret;
 
-	DEBUG_LOG("rping_setup_buffers called on cb %p\n", cb);
+	DEBUG_RPING_TRACE("rping_setup_buffers called on cb %p\n", cb);
 
 	cb->recv_mr = ibv_reg_mr(cb->pd, &cb->recv_buf, sizeof cb->recv_buf,
 				 IBV_ACCESS_LOCAL_WRITE);
@@ -524,7 +556,7 @@ static int rping_setup_buffers(struct rping_cb *cb)
 	}
 
 	rping_setup_wr(cb);
-	DEBUG_LOG("allocated & registered buffers...\n");
+	DEBUG_RPING_TRACE("allocated & registered buffers...\n");
 	return 0;
 
 err5:
@@ -542,7 +574,7 @@ err1:
 
 static void rping_free_buffers(struct rping_cb *cb)
 {
-	DEBUG_LOG("rping_free_buffers called on cb %p\n", cb);
+	DEBUG_RPING_TRACE("rping_free_buffers called on cb %p\n", cb);
 	ibv_dereg_mr(cb->recv_mr);
 	ibv_dereg_mr(cb->send_mr);
 	ibv_dereg_mr(cb->rdma_mr);
@@ -570,7 +602,9 @@ static int rping_create_qp(struct rping_cb *cb)
 	id = cb->server ? cb->child_cm_id : cb->cm_id;
 
 	if (cb->self_create_qp) {
+		RPING_TRACE("rping_create_qp(): SELF ibv_create_qp(IB_VERBS) Needs PD\n");
 		cb->qp = ibv_create_qp(cb->pd, &init_attr);
+		RPING_TRACE("rping_create_qp(): SELF ibv_create_qp(IB_VERBS) Needs PD Done\n");
 		if (!cb->qp) {
 			perror("ibv_create_qp");
 			return -1;
@@ -583,9 +617,11 @@ static int rping_create_qp(struct rping_cb *cb)
 			.qp_access_flags = 0,
 		};
 
+		RPING_TRACE("rping_create_qp(): SELF ibv_modify_qp(IB_VERBS) QP ATTRS\n");
 		ret = ibv_modify_qp(cb->qp, &attr,
 				    IBV_QP_STATE | IBV_QP_PKEY_INDEX |
 				    IBV_QP_PORT | IBV_QP_ACCESS_FLAGS);
+		RPING_TRACE("rping_create_qp(): SELF ibv_modify_qp(IB_VERBS) QP ATTRS Done \n");
 
 		if (ret) {
 			perror("ibv_modify_qp");
@@ -594,7 +630,9 @@ static int rping_create_qp(struct rping_cb *cb)
 		return ret ? -1 : 0;
 	}
 
+	RPING_TRACE("rping_create_qp(): rdma_create_qp(LIBRDMACM)\n");
 	ret = rdma_create_qp(id, cb->pd, &init_attr);
+	RPING_TRACE("rping_create_qp(): rdma_create_qp(LIBRDMACM) Done\n");
 	if (!ret)
 		cb->qp = id->qp;
 	else
@@ -614,42 +652,51 @@ static int rping_setup_qp(struct rping_cb *cb, struct rdma_cm_id *cm_id)
 {
 	int ret;
 
+	RPING_TRACE("rping_setup_qp(): ibv_alloc_pd(IBVERBS)\n");
 	cb->pd = ibv_alloc_pd(cm_id->verbs);
 	if (!cb->pd) {
 		fprintf(stderr, "ibv_alloc_pd failed\n");
 		return errno;
 	}
-	DEBUG_LOG("created pd %p\n", cb->pd);
+	DEBUG_RPING_TRACE("created pd %p\n", cb->pd);
 
+	RPING_TRACE("rping_setup_qp(): ibv_create_comp_channel(IBVERBS)\n");
 	cb->channel = ibv_create_comp_channel(cm_id->verbs);
+	RPING_TRACE("rping_setup_qp(): ibv_create_comp_channel(IBVERBS) Done\n");
 	if (!cb->channel) {
 		fprintf(stderr, "ibv_create_comp_channel failed\n");
 		ret = errno;
 		goto err1;
 	}
-	DEBUG_LOG("created channel %p\n", cb->channel);
+	DEBUG_RPING_TRACE("created channel %p\n", cb->channel);
 
+	RPING_TRACE("rping_setup_qp(): ibv_create_cq(IBVERBS)\n");
 	cb->cq = ibv_create_cq(cm_id->verbs, RPING_SQ_DEPTH * 2, cb,
 				cb->channel, 0);
+	RPING_TRACE("rping_setup_qp(): ibv_create_cq(IBVERBS) Done\n");
 	if (!cb->cq) {
 		fprintf(stderr, "ibv_create_cq failed\n");
 		ret = errno;
 		goto err2;
 	}
-	DEBUG_LOG("created cq %p\n", cb->cq);
+	DEBUG_RPING_TRACE("created cq %p\n", cb->cq);
 
+	RPING_TRACE("rping_setup_qp(): ibv_req_notify_cq(IBVERBS)\n");
 	ret = ibv_req_notify_cq(cb->cq, 0);
+	RPING_TRACE("rping_setup_qp(): ibv_req_notify_cq(IBVERBS) Done\n");
 	if (ret) {
 		fprintf(stderr, "ibv_create_cq failed\n");
 		ret = errno;
 		goto err3;
 	}
 
+	RPING_TRACE("rping_setup_qp(): rping_create_qp(): \n");
 	ret = rping_create_qp(cb);
+	RPING_TRACE("rping_setup_qp(): rping_create_qp(): Done\n");
 	if (ret) {
 		goto err3;
 	}
-	DEBUG_LOG("created qp %p\n", cb->qp);
+	DEBUG_RPING_TRACE("created qp %p\n", cb->qp);
 	return 0;
 
 err3:
@@ -687,7 +734,7 @@ static void *cq_thread(void *arg)
 	void *ev_ctx;
 	int ret;
 	
-	DEBUG_LOG("cq_thread started.\n");
+	DEBUG_RPING_TRACE("cq_thread started.\n");
 
 	while (1) {	
 		pthread_testcancel();
@@ -721,7 +768,7 @@ static void rping_format_send(struct rping_cb *cb, char *buf, struct ibv_mr *mr)
 	info->rkey = htobe32(mr->rkey);
 	info->size = htobe32(cb->size);
 
-	DEBUG_LOG("RDMA addr %" PRIx64" rkey %x len %d\n",
+	DEBUG_RPING_TRACE("RDMA addr %" PRIx64" rkey %x len %d\n",
 		  be64toh(info->buf), be32toh(info->rkey), be32toh(info->size));
 }
 
@@ -740,7 +787,7 @@ static int rping_test_server(struct rping_cb *cb)
 			break;
 		}
 
-		DEBUG_LOG("server received sink adv\n");
+		DEBUG_RPING_TRACE("server received sink adv\n");
 
 		/* Issue RDMA Read. */
 		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_READ;
@@ -753,7 +800,7 @@ static int rping_test_server(struct rping_cb *cb)
 			fprintf(stderr, "post send error %d\n", ret);
 			break;
 		}
-		DEBUG_LOG("server posted rdma read req \n");
+		DEBUG_RPING_TRACE("server posted rdma read req \n");
 
 		/* Wait for read completion */
 		sem_wait(&cb->sem);
@@ -763,7 +810,7 @@ static int rping_test_server(struct rping_cb *cb)
 			ret = -1;
 			break;
 		}
-		DEBUG_LOG("server received read complete\n");
+		DEBUG_RPING_TRACE("server received read complete\n");
 
 		/* Display data in recv buf */
 		if (cb->verbose)
@@ -775,7 +822,7 @@ static int rping_test_server(struct rping_cb *cb)
 			fprintf(stderr, "post send error %d\n", ret);
 			break;
 		}
-		DEBUG_LOG("server posted go ahead\n");
+		DEBUG_RPING_TRACE("server posted go ahead\n");
 
 		/* Wait for client's RDMA STAG/TO/Len */
 		sem_wait(&cb->sem);
@@ -785,14 +832,14 @@ static int rping_test_server(struct rping_cb *cb)
 			ret = -1;
 			break;
 		}
-		DEBUG_LOG("server received sink adv\n");
+		DEBUG_RPING_TRACE("server received sink adv\n");
 
 		/* RDMA Write echo data */
 		cb->rdma_sq_wr.opcode = IBV_WR_RDMA_WRITE;
 		cb->rdma_sq_wr.wr.rdma.rkey = cb->remote_rkey;
 		cb->rdma_sq_wr.wr.rdma.remote_addr = cb->remote_addr;
 		cb->rdma_sq_wr.sg_list->length = strlen(cb->rdma_buf) + 1;
-		DEBUG_LOG("rdma write from lkey %x laddr %" PRIx64 " len %d\n",
+		DEBUG_RPING_TRACE("rdma write from lkey %x laddr %" PRIx64 " len %d\n",
 			  cb->rdma_sq_wr.sg_list->lkey,
 			  cb->rdma_sq_wr.sg_list->addr,
 			  cb->rdma_sq_wr.sg_list->length);
@@ -811,7 +858,7 @@ static int rping_test_server(struct rping_cb *cb)
 			ret = -1;
 			break;
 		}
-		DEBUG_LOG("server rdma write complete \n");
+		DEBUG_RPING_TRACE("server rdma write complete \n");
 
 		/* Tell client to begin again */
 		ret = ibv_post_send(cb->qp, &cb->sq_wr, &bad_wr);
@@ -819,7 +866,7 @@ static int rping_test_server(struct rping_cb *cb)
 			fprintf(stderr, "post send error %d\n", ret);
 			break;
 		}
-		DEBUG_LOG("server posted go ahead\n");
+		DEBUG_RPING_TRACE("server posted go ahead\n");
 	}
 
 	return (cb->state == DISCONNECTED) ? 0 : ret;
@@ -834,14 +881,17 @@ static int rping_bind_server(struct rping_cb *cb)
 	else
 		((struct sockaddr_in6 *) &cb->sin)->sin6_port = cb->port;
 
+	RPING_TRACE("rping_bind_server(): rdma_bind_addr(RDMA): cm_id\n");
 	ret = rdma_bind_addr(cb->cm_id, (struct sockaddr *) &cb->sin);
 	if (ret) {
 		perror("rdma_bind_addr");
 		return ret;
 	}
-	DEBUG_LOG("rdma_bind_addr successful\n");
+	DEBUG_RPING_TRACE("rdma_bind_addr successful\n");
+	RPING_TRACE("rdma_bind_addr successful\n");
 
-	DEBUG_LOG("rdma_listen\n");
+	DEBUG_RPING_TRACE("rdma_listen\n");
+	RPING_TRACE("rping_bind_server(): rdma_listen(RDMA) Listening for incoming requests\n");
 	ret = rdma_listen(cb->cm_id, 3);
 	if (ret) {
 		perror("rdma_listen");
@@ -974,9 +1024,11 @@ static int rping_run_server(struct rping_cb *cb)
 	struct ibv_recv_wr *bad_wr;
 	int ret;
 
+	RPING_TRACE("rping_run_server():\n");
 	ret = rping_bind_server(cb);
 	if (ret)
 		return ret;
+	RPING_TRACE("rping_run_server(): Processing Incoming request\n");
 
 	sem_wait(&cb->sem);
 	if (cb->state != CONNECT_REQUEST) {
@@ -985,41 +1037,52 @@ static int rping_run_server(struct rping_cb *cb)
 		return -1;
 	}
 
+	RPING_TRACE("rping_run_server(): rping_setup_qp():\n");
 	ret = rping_setup_qp(cb, cb->child_cm_id);
+	RPING_TRACE("rping_run_server(): rping_setup_qp():\n");
 	if (ret) {
 		fprintf(stderr, "setup_qp failed: %d\n", ret);
 		return ret;
 	}
 
+	RPING_TRACE("rping_run_server(): rping_setup_buffers():\n");
 	ret = rping_setup_buffers(cb);
+	RPING_TRACE("rping_run_server(): rping_setup_buffers():Done\n");
 	if (ret) {
 		fprintf(stderr, "rping_setup_buffers failed: %d\n", ret);
 		goto err1;
 	}
 
+	RPING_TRACE("rping_run_server(): ibv_post_recv():\n");
 	ret = ibv_post_recv(cb->qp, &cb->rq_wr, &bad_wr);
+	RPING_TRACE("rping_run_server(): ibv_post_recv():Done\n");
 	if (ret) {
 		fprintf(stderr, "ibv_post_recv failed: %d\n", ret);
 		goto err2;
 	}
 
+	RPING_TRACE("rping_run_server(): Starting CQ_THREAD():\n");
 	ret = pthread_create(&cb->cqthread, NULL, cq_thread, cb);
 	if (ret) {
 		perror("pthread_create");
 		goto err2;
 	}
 
+	RPING_TRACE("rping_run_server(): rping_accept():\n");
 	ret = rping_accept(cb);
+	RPING_TRACE("rping_run_server(): rping_accept():Done\n");
 	if (ret) {
 		fprintf(stderr, "connect error %d\n", ret);
 		goto err2;
 	}
 
+	RPING_TRACE("rping_run_server(): rping_test_server():\n");
 	ret = rping_test_server(cb);
 	if (ret) {
 		fprintf(stderr, "rping server failed: %d\n", ret);
 		goto err3;
 	}
+	RPING_TRACE("rping_run_server(): rping_test_server(): Done\n");
 
 	ret = 0;
 err3:
@@ -1135,7 +1198,7 @@ static int rping_connect_client(struct rping_cb *cb)
 		}
 	}
 
-	DEBUG_LOG("rdma_connect successful\n");
+	DEBUG_RPING_TRACE("rdma_connect successful\n");
 	return 0;
 }
 
@@ -1166,7 +1229,7 @@ static int rping_bind_client(struct rping_cb *cb)
 		return -1;
 	}
 
-	DEBUG_LOG("rdma_resolve_addr - rdma_resolve_route successful\n");
+	DEBUG_RPING_TRACE("rdma_resolve_addr - rdma_resolve_route successful\n");
 	return 0;
 }
 
@@ -1268,6 +1331,7 @@ static void usage(const char *name)
 	printf("\t-p port\t\tport\n");
 	printf("\t-P\t\tpersistent server mode allowing multiple connections\n");
 	printf("\t-q\t\tuse self-created, self-modified QP\n");
+	printf("\t-z\t\tvijay rping debug mode enable [any possitive integer]\n");
 }
 
 int main(int argc, char *argv[])
@@ -1277,6 +1341,8 @@ int main(int argc, char *argv[])
 	int ret = 0;
 	int persistent_server = 0;
 
+	RPING_TRACE("\n");
+	RPING_TRACE("Allocated Control Block Structure\n");
 	cb = malloc(sizeof(*cb));
 	if (!cb)
 		return -ENOMEM;
@@ -1290,7 +1356,7 @@ int main(int argc, char *argv[])
 	sem_init(&cb->sem, 0, 0);
 
 	opterr = 0;
-	while ((op = getopt(argc, argv, "a:I:Pp:C:S:t:scvVdq")) != -1) {
+	while ((op = getopt(argc, argv, "a:I:Pp:C:S:t:scvVdqz")) != -1) {
 		switch (op) {
 		case 'a':
 			ret = get_addr(optarg, (struct sockaddr *) &cb->sin);
@@ -1303,15 +1369,15 @@ int main(int argc, char *argv[])
 			break;
 		case 'p':
 			cb->port = htobe16(atoi(optarg));
-			DEBUG_LOG("port %d\n", (int) atoi(optarg));
+			DEBUG_RPING_TRACE("port %d\n", (int) atoi(optarg));
 			break;
 		case 's':
 			cb->server = 1;
-			DEBUG_LOG("server\n");
+			DEBUG_RPING_TRACE("server\n");
 			break;
 		case 'c':
 			cb->server = 0;
-			DEBUG_LOG("client\n");
+			DEBUG_RPING_TRACE("client\n");
 			break;
 		case 'S':
 			cb->size = atoi(optarg);
@@ -1322,7 +1388,7 @@ int main(int argc, char *argv[])
 				       cb->size, RPING_MIN_BUFSIZE, RPING_BUFSIZE);
 				ret = EINVAL;
 			} else
-				DEBUG_LOG("size %d\n", (int) atoi(optarg));
+				DEBUG_RPING_TRACE("size %d\n", (int) atoi(optarg));
 			break;
 		case 'C':
 			cb->count = atoi(optarg);
@@ -1331,21 +1397,27 @@ int main(int argc, char *argv[])
 					cb->count);
 				ret = EINVAL;
 			} else
-				DEBUG_LOG("count %d\n", (int) cb->count);
+				DEBUG_RPING_TRACE("count %d\n", (int) cb->count);
 			break;
 		case 'v':
 			cb->verbose++;
-			DEBUG_LOG("verbose\n");
+			DEBUG_RPING_TRACE("verbose\n");
 			break;
 		case 'V':
 			cb->validate++;
-			DEBUG_LOG("validate data\n");
+			DEBUG_RPING_TRACE("validate data\n");
 			break;
 		case 'd':
 			debug++;
 			break;
 		case 'q':
 			cb->self_create_qp = 1;
+			break;
+		case 'z':
+			//CRASH IN C LIBRARY
+			//rping_trace = atoi(optarg);
+			printf("Running in debug mode\n");
+			kprintf("Running in trace mode\n");
 			break;
 		default:
 			usage("rping");
@@ -1367,31 +1439,39 @@ int main(int argc, char *argv[])
 		ret = errno;
 		goto out;
 	}
+	RPING_TRACE("created event channel : create_first_event_channel()\n");
 
 	ret = rdma_create_id(cb->cm_channel, &cb->cm_id, cb, RDMA_PS_TCP);
 	if (ret) {
 		perror("rdma_create_id");
 		goto out2;
 	}
-	DEBUG_LOG("created cm_id %p\n", cb->cm_id);
+	DEBUG_RPING_TRACE("created cm_id %p\n", cb->cm_id);
+
+	RPING_TRACE("created cm_id %p, RDMA_PS_TCP - Kind of Socket\n", cb->cm_id);
 
 	ret = pthread_create(&cb->cmthread, NULL, cm_thread, cb);
 	if (ret) {
 		perror("pthread_create");
 		goto out2;
 	}
+	RPING_TRACE("Connection Management Thread created\n");
 
 	if (cb->server) {
+
+		RPING_TRACE("Running rping server\n");
 		if (persistent_server)
 			ret = rping_run_persistent_server(cb);
 		else
 			ret = rping_run_server(cb);
 	} else {
+		RPING_TRACE("Running rping client\n");
 		ret = rping_run_client(cb);
 	}
 
-	DEBUG_LOG("destroy cm_id %p\n", cb->cm_id);
+	DEBUG_RPING_TRACE("destroy cm_id %p\n", cb->cm_id);
 	rdma_destroy_id(cb->cm_id);
+	RPING_TRACE(" Destroyed CM ID\n");
 out2:
 	rdma_destroy_event_channel(cb->cm_channel);
 out:

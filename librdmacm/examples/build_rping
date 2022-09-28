@@ -1,0 +1,3 @@
+#!/bin/bash
+
+gcc -o myrping rping.c common.c -lpthread -lrt -lm -lrdmacm -libumad -libverbs -libmad
